@@ -1,0 +1,15 @@
+SessionReaper patch (CVE-2025-54236) for Magento Open Source
+Copyright (c) Big Cart Energy
+https://bigcartenergy.com
+
+This product is licensed under the Open Software License version 3.0 (OSL-3.0).
+See LICENSE.txt for the full text.
+
+The validation rule this module applies mirrors the fix Adobe published in
+Magento Open Source (Copyright Adobe, licensed under the Open Software License
+version 3.0), re-implemented here as a plugin so that it can be installed on
+releases that did not receive the fix. No Magento source file is copied or
+modified by this module.
+
+Magento is a trademark of Adobe. Big Cart Energy is not affiliated with,
+endorsed by or sponsored by Adobe.

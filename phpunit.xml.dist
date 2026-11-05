@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+/**
+ * Copyright (c) Big Cart Energy. All rights reserved.
+ * SPDX-License-Identifier: OSL-3.0
+ *
+ * Standalone unit test run, outside a Magento installation's test framework:
+ *   BCE_MAGENTO_ROOT=/path/to/magento2 vendor/bin/phpunit -c phpunit.xml.dist
+ * Inside a Magento installation the tests are picked up by dev/tests/unit instead.
+ */
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         bootstrap="Test/Unit/bootstrap.php"
+         colors="true"
+         failOnWarning="true">
+    <testsuites>
+        <testsuite name="unit">
+            <directory>Test/Unit</directory>
+        </testsuite>
+    </testsuites>
+</phpunit>

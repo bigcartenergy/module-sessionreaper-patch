@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * Copyright (c) Big Cart Energy. All rights reserved.
+ * SPDX-License-Identifier: OSL-3.0
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+    <!-- The guard: a before plugin on the one public entry point of the Web API input processor. -->
+    <type name="Magento\Framework\Webapi\ServiceInputProcessor">
+        <plugin name="bigcartenergy_sessionreaper_guard"
+                type="BigCartEnergy\SessionReaperPatch\Plugin\Webapi\ServiceInputProcessorPlugin"
+                sortOrder="20"/>
+    </type>
+    <!-- Logging is on by default. Set enableLog to false in app/etc/di.xml to turn it off (see README). -->
+    <type name="BigCartEnergy\SessionReaperPatch\Plugin\Webapi\ServiceInputProcessorPlugin">
+        <arguments>
+            <argument name="enableLog" xsi:type="boolean">true</argument>
+        </arguments>
+    </type>
+    <!-- The module's own log channel: var/log/bigcartenergy_cve-2025-54236.log -->
+    <virtualType name="BigCartEnergy\SessionReaperPatch\Model\Logger\Logger" type="Magento\Framework\Logger\Monolog">
+        <arguments>
+            <argument name="name" xsi:type="string">bigcartenergy_sessionreaper</argument>
+            <argument name="handlers" xsi:type="array">
+                <item name="system" xsi:type="object">BigCartEnergy\SessionReaperPatch\Model\Logger\Handler</item>
+            </argument>
+        </arguments>
+    </virtualType>
+    <type name="BigCartEnergy\SessionReaperPatch\Model\RequestLogger">
+        <arguments>
+            <argument name="logger" xsi:type="object">BigCartEnergy\SessionReaperPatch\Model\Logger\Logger</argument>
+        </arguments>
+    </type>
+</config>
