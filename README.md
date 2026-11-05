@@ -32,7 +32,21 @@ A version that is not in this table has not been tested. Use at your own risk an
 | --- | --- | --- | --- |
 | 2.4.9 | 8.5 | MySQL 8.4 | Pass: install and `setup:di:compile`; REST guest checkout to a placed order, customer account create, product search with filters and sort orders, admin product save with custom and extension attributes; one SOAP call with search criteria; the guard removes a constructor parameter outside `Api\Data` over REST (single and list) and over SOAP (both `item` wrapper shapes) and logs it; the same calls behave the same with and without the module (Adobe's fix is already in this release); removal with a REST pass afterwards; unit tests in place. Alone and together with the CosmicSting patch |
 | 2.4.8 | 8.3 | MySQL 8.4 | Pass: the same checks; on this release the module is the only guard |
+| 2.4.7 | 8.2 | MySQL 8.0 | Pass: the same checks; on this release the module is the only guard |
+| 2.4.6 | 8.1 | MySQL 8.0 | Pass: the same checks; on this release the module is the only guard |
+| 2.4.3-p3 | 7.4 | MySQL 8.0 | Pass: the same checks; on this release the module is the only guard |
 | 2.3.7-p4 | 7.4 | MySQL 5.7 | Pass: the same checks; on this release the module is the only guard |
+| 2.3.5-p2 ¹ | 7.3 | MySQL 5.7 | Pass: the same checks; on this release the module is the only guard |
+| 2.3.0 ¹ | 7.2 | MySQL 5.7 | Pass: the same checks; on this release the module is the only guard. 2.3.0's processor copies nested constructor data without converting it, and the module's removal of the keys that fail the allow-list is what closes that path there |
+
+¹ Installed from Adobe's public release tag of that version rather than as a composer project (the public package mirror serves no 2.3 release before 2.3.7-p2); the code under test is the release's own.
+
+| Mage-OS | Based on Magento Open Source | PHP | Database | Result |
+| --- | --- | --- | --- | --- |
+| 4.0.0 | 2.4.9 | 8.4 | MySQL 8.4 | Pass: the same checks; harmless, fix already in core |
+| 1.0.6 | 2.4.7-p4 | 8.3 | MySQL 8.0 | Pass: the same checks; on this release the module is the only guard (the fix is not in its core) |
+
+Whether another Mage-OS release already carries the fix follows the Magento Open Source release it is based on; the module installs unchanged on any of them.
 
 ## Install
 
