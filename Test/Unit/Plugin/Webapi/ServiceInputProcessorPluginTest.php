@@ -22,7 +22,9 @@ use Magento\Framework\Api\SearchCriteria;
 use Magento\Framework\Api\SearchCriteriaInterface;
 use Magento\Framework\ObjectManager\ConfigInterface;
 use Magento\Framework\Reflection\TypeProcessor;
+use Magento\Framework\Webapi\CustomAttributeTypeLocatorInterface;
 use Magento\Framework\Webapi\ServiceInputProcessor;
+use Magento\Framework\Webapi\ServiceTypeToEntityTypeMap;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -39,12 +41,20 @@ class ServiceInputProcessorPluginTest extends TestCase
      */
     private $preferenceRequests = [];
 
+    /**
+     * Every [code, entity type] pair the type locator double received, in order.
+     *
+     * @var array[]
+     */
+    private $locatorRequests = [];
+
     protected function setUp(): void
     {
         if (!class_exists(TypeProcessor::class) || !class_exists(SearchCriteria::class)) {
             self::markTestSkipped('Magento framework not available (set BCE_MAGENTO_ROOT).');
         }
         $this->preferenceRequests = [];
+        $this->locatorRequests = [];
     }
 
     public function testAKeyNamingAConstructorParameterOutsideApiDataIsRemovedAndTheRestStays(): void
@@ -221,15 +231,162 @@ class ServiceInputProcessorPluginTest extends TestCase
         self::assertSame([['title' => 'One'], ['title' => 'Two']], $result[0], 'the removal stands without logging');
     }
 
+    public function testAComplexCustomAttributeValueGetsTheAllowListToo(): void
+    {
+        $data = [
+            'title' => 'Hello',
+            'custom_attributes' => [
+                [
+                    'attribute_code' => 'memo',
+                    'value' => ['title' => 'Inner', 'attachment' => ['label' => 'a'], 'tag' => ['name' => 't']],
+                ],
+                ['attribute_code' => 'color', 'value' => 'red'],
+            ],
+        ];
+        $result = $this->convert(
+            $data,
+            Note::class,
+            [],
+            [Note::class => 'bench_note'],
+            ['memo' => Note::class, 'color' => 'string']
+        );
+
+        self::assertNotNull($result);
+        self::assertSame('Hello', $result[0]['title']);
+        self::assertSame(
+            ['title' => 'Inner', 'tag' => ['name' => 't']],
+            $result[0]['custom_attributes'][0]['value'],
+            'the parameter outside Api\Data is removed from the custom attribute value, the Api\Data one stays'
+        );
+        self::assertSame('red', $result[0]['custom_attributes'][1]['value'], 'a scalar value is left alone');
+        self::assertSame([['memo', 'bench_note']], $this->locatorRequests, 'only the array value is resolved');
+    }
+
+    public function testSimpleUnknownAndScalarCustomAttributesAreLeftAlone(): void
+    {
+        $data = [
+            'title' => 'Hello',
+            'custom_attributes' => [
+                ['attribute_code' => 'sizes', 'value' => ['s', 'm']],
+                ['attribute_code' => 'unknown_code', 'value' => ['title' => 'x', 'attachment' => ['label' => 'a']]],
+                ['attribute_code' => 'memo', 'value' => 'a string, not an object'],
+                ['attribute_code' => 'anything', 'value' => ['attachment' => ['label' => 'a']]],
+                ['value' => ['attachment' => ['label' => 'a']]],
+                ['attribute_code' => 'memo'],
+                'plain scalar entry',
+            ],
+        ];
+        $result = $this->convert(
+            $data,
+            Note::class,
+            [],
+            [Note::class => 'bench_note'],
+            ['sizes' => 'string[]', 'memo' => Note::class, 'anything' => 'mixed']
+        );
+        self::assertNull($result, 'a simple type, an unknown code, a scalar value, "mixed" and rejected entries');
+    }
+
+    public function testAnArrayTypedCustomAttributeIsSanitizedItemByItem(): void
+    {
+        $data = [
+            'custom_attributes' => [
+                [
+                    'attribute_code' => 'memos',
+                    'value' => [
+                        ['title' => 'One', 'attachment' => ['label' => 'a']],
+                        ['title' => 'Two', 'tag' => ['name' => 't']],
+                        'scalar item left alone',
+                    ],
+                ],
+            ],
+        ];
+        $types = ['memos' => Note::class . '[]'];
+        $result = $this->convert($data, Note::class, [], [Note::class => 'bench_note'], $types);
+
+        self::assertNotNull($result);
+        self::assertSame(
+            [['title' => 'One'], ['title' => 'Two', 'tag' => ['name' => 't']], 'scalar item left alone'],
+            $result[0]['custom_attributes'][0]['value']
+        );
+    }
+
+    public function testTheSoapShapeOfCustomAttributesIsHandledToo(): void
+    {
+        $data = [
+            'title' => 'Hello',
+            'customAttributes' => [
+                ['attributeCode' => 'memo', 'value' => ['title' => 'Inner', 'attachment' => ['label' => 'a']]],
+            ],
+        ];
+        $result = $this->convert($data, Note::class, [], [Note::class => 'bench_note'], ['memo' => Note::class]);
+
+        self::assertNotNull($result);
+        self::assertSame(['title' => 'Inner'], $result[0]['customAttributes'][0]['value']);
+    }
+
+    public function testAnOwnerWithoutAnEntityTypeNeverConsultsTheLocator(): void
+    {
+        $data = [
+            'custom_attributes' => [
+                ['attribute_code' => 'memo', 'value' => ['title' => 'Inner', 'attachment' => ['label' => 'a']]],
+            ],
+        ];
+        self::assertNull($this->convert($data, Note::class, [], [], ['memo' => Note::class]));
+        self::assertSame([], $this->locatorRequests);
+    }
+
+    public function testALocatorFailureLeavesTheValueToTheProcessor(): void
+    {
+        $data = [
+            'custom_attributes' => [
+                ['attribute_code' => 'memo', 'value' => ['title' => 'Inner', 'attachment' => ['label' => 'a']]],
+            ],
+        ];
+        $result = $this->plugin($this->stub(RequestLogger::class), true, [], [Note::class => 'bench_note'], null)
+            ->beforeConvertValue($this->subject(), $data, Note::class);
+        self::assertNull($result);
+    }
+
+    public function testCustomAttributeRemovalsAreLoggedUnderTheAttributePath(): void
+    {
+        $logger = $this->createMock(RequestLogger::class);
+        $logger->expects(self::once())
+            ->method('logStripped')
+            ->with(
+                Note::class,
+                self::callback(function ($parameters): bool {
+                    $path = 'custom_attributes[memo].attachment';
+                    return array_keys($parameters) === [$path]
+                        && ltrim((string)$parameters[$path], '\\') === Attachment::class;
+                })
+            );
+        $data = [
+            'title' => 'Hello',
+            'custom_attributes' => [
+                ['attribute_code' => 'memo', 'value' => ['title' => 'Inner', 'attachment' => ['label' => 'a']]],
+            ],
+        ];
+        $result = $this->plugin($logger, true, [], [Note::class => 'bench_note'], ['memo' => Note::class])
+            ->beforeConvertValue($this->subject(), $data, Note::class);
+        self::assertSame(['title' => 'Inner'], $result[0]['custom_attributes'][0]['value']);
+    }
+
     /**
      * @param mixed $data
      * @param mixed $type
      * @param string[] $preferences
+     * @param string[] $entityTypes Class to entity type, as the processor's map
+     * @param string[] $attributeTypes Attribute code to type, as the processor's locator
      * @return array|null
      */
-    private function convert($data, $type, array $preferences = []): ?array
-    {
-        return $this->plugin($this->stub(RequestLogger::class), true, $preferences)
+    private function convert(
+        $data,
+        $type,
+        array $preferences = [],
+        array $entityTypes = [],
+        array $attributeTypes = []
+    ): ?array {
+        return $this->plugin($this->stub(RequestLogger::class), true, $preferences, $entityTypes, $attributeTypes)
             ->beforeConvertValue($this->subject(), $data, $type);
     }
 
@@ -237,19 +394,38 @@ class ServiceInputProcessorPluginTest extends TestCase
      * @param RequestLogger $logger
      * @param bool $enableLog
      * @param string[] $preferences
+     * @param string[] $entityTypes
+     * @param string[]|null $attributeTypes Null for a locator that fails
      * @return ServiceInputProcessorPlugin
      */
     private function plugin(
         RequestLogger $logger,
         bool $enableLog,
-        array $preferences = []
+        array $preferences = [],
+        array $entityTypes = [],
+        ?array $attributeTypes = []
     ): ServiceInputProcessorPlugin {
         $config = $this->stub(ConfigInterface::class);
         $config->method('getPreference')->willReturnCallback(function ($type) use ($preferences): string {
             $this->preferenceRequests[] = (string)$type;
             return $preferences[$type] ?? (string)$type;
         });
-        return new ServiceInputProcessorPlugin(new TypeProcessor(), $config, $logger, $enableLog);
+        $locator = $this->stub(CustomAttributeTypeLocatorInterface::class);
+        $locator->method('getType')->willReturnCallback(function ($code, $entityType) use ($attributeTypes): string {
+            $this->locatorRequests[] = [(string)$code, (string)$entityType];
+            if ($attributeTypes === null) {
+                throw new \RuntimeException('locator failure');
+            }
+            return $attributeTypes[$code] ?? TypeProcessor::NORMALIZED_ANY_TYPE;
+        });
+        return new ServiceInputProcessorPlugin(
+            new TypeProcessor(),
+            $config,
+            $logger,
+            $locator,
+            new ServiceTypeToEntityTypeMap($entityTypes),
+            $enableLog
+        );
     }
 
     private function subject(): ServiceInputProcessor

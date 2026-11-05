@@ -8,10 +8,13 @@ declare(strict_types=1);
 namespace BigCartEnergy\SessionReaperPatch\Plugin\Webapi;
 
 use BigCartEnergy\SessionReaperPatch\Model\RequestLogger;
+use Magento\Framework\Api\AttributeValue;
 use Magento\Framework\Api\ExtensionAttributesInterface;
 use Magento\Framework\ObjectManager\ConfigInterface;
 use Magento\Framework\Reflection\TypeProcessor;
+use Magento\Framework\Webapi\CustomAttributeTypeLocatorInterface;
 use Magento\Framework\Webapi\ServiceInputProcessor;
+use Magento\Framework\Webapi\ServiceTypeToEntityTypeMap;
 
 /**
  * Guard for CVE-2025-54236 on the Web API input processor.
@@ -21,8 +24,14 @@ use Magento\Framework\Webapi\ServiceInputProcessor;
  * Adobe added to the processor's getConstructorData() in the fixed releases, mirrored character for character.
  * Every other such key is removed from the data, so it reaches neither the constructor nor the setter fallback
  * (the official fix leaves the key in place for the setters; removing it is this module's one deliberate
- * difference). Array types are handled item by item, the SOAP "item" wrapper included. When nothing is
- * removed the plugin returns null and the processor receives its arguments untouched.
+ * difference). Array types are handled item by item, the SOAP "item" wrapper included.
+ *
+ * Custom attributes get the same rule. The processor builds an object-typed custom attribute value without
+ * passing through convertValue(), so the plugin resolves each attribute's type the way the processor does (the
+ * entity type of the owning class, then the custom attribute type locator) and applies the allow-list to the
+ * value, or to each item of an array-typed value. Simple and "mixed" attributes, unknown codes, values that are
+ * not arrays and owners without an entity type are left alone, as are entries the processor would reject
+ * itself. When nothing is removed the plugin returns null and the processor receives its arguments untouched.
  */
 class ServiceInputProcessorPlugin
 {
@@ -35,6 +44,17 @@ class ServiceInputProcessorPlugin
      * The key the SOAP server wraps array values in; the processor removes it after this plugin has run.
      */
     private const SOAP_ITEM_KEY = 'item';
+
+    /**
+     * The keys under which a data object's custom attributes arrive: REST (snake case) and SOAP (camel case).
+     */
+    private const CUSTOM_ATTRIBUTES_KEYS = ['custom_attributes', 'customAttributes'];
+
+    /**
+     * The keys that carry a custom attribute's code: REST (snake case) and SOAP (camel case), as the processor
+     * reads them.
+     */
+    private const ATTRIBUTE_CODE_KEYS = [AttributeValue::ATTRIBUTE_CODE, 'attributeCode'];
 
     /**
      * The reflection classes the Magento versions this module supports ship, in order of preference.
@@ -60,6 +80,16 @@ class ServiceInputProcessorPlugin
     private $requestLogger;
 
     /**
+     * @var CustomAttributeTypeLocatorInterface
+     */
+    private $customAttributeTypeLocator;
+
+    /**
+     * @var ServiceTypeToEntityTypeMap
+     */
+    private $serviceTypeToEntityTypeMap;
+
+    /**
      * @var bool
      */
     private $enableLog;
@@ -79,20 +109,34 @@ class ServiceInputProcessorPlugin
     private $decisions = [];
 
     /**
+     * Complex custom attribute types by entity type and attribute code; false where the processor would convert
+     * the value through convertValue() instead (simple or "mixed" type) or the type could not be read.
+     *
+     * @var array[]
+     */
+    private $customAttributeTypes = [];
+
+    /**
      * @param TypeProcessor $typeProcessor
      * @param ConfigInterface $config The ObjectManager configuration, for the preference of a type
      * @param RequestLogger $requestLogger
+     * @param CustomAttributeTypeLocatorInterface $customAttributeTypeLocator The processor's own type locator
+     * @param ServiceTypeToEntityTypeMap $serviceTypeToEntityTypeMap The processor's own class to entity type map
      * @param bool $enableLog Whether a request with removed keys writes a line to the module's log file
      */
     public function __construct(
         TypeProcessor $typeProcessor,
         ConfigInterface $config,
         RequestLogger $requestLogger,
+        CustomAttributeTypeLocatorInterface $customAttributeTypeLocator,
+        ServiceTypeToEntityTypeMap $serviceTypeToEntityTypeMap,
         bool $enableLog = true
     ) {
         $this->typeProcessor = $typeProcessor;
         $this->config = $config;
         $this->requestLogger = $requestLogger;
+        $this->customAttributeTypeLocator = $customAttributeTypeLocator;
+        $this->serviceTypeToEntityTypeMap = $serviceTypeToEntityTypeMap;
         $this->enableLog = $enableLog;
     }
 
@@ -172,14 +216,16 @@ class ServiceInputProcessorPlugin
     /**
      * Removes from one item every key that names a constructor parameter not on the allow-list.
      *
-     * A key with a null value is left alone, as the processor never treats it as constructor input.
+     * The same rule is then applied inside the item's object-typed custom attribute values. A key with a null
+     * value is left alone, as the processor never treats it as constructor input.
      *
      * @param array $item
      * @param string $className
      * @param array $removed Collects [parameter name => type] of every key removed
+     * @param string $label Prefix for the names collected in $removed (the custom attribute path)
      * @return array
      */
-    private function sanitize(array $item, string $className, array &$removed): array
+    private function sanitize(array $item, string $className, array &$removed, string $label = ''): array
     {
         foreach ($this->constructorParameters($className) as $name => $parameter) {
             if (!isset($item[$name])) {
@@ -190,9 +236,142 @@ class ServiceInputProcessorPlugin
                 continue;
             }
             unset($item[$name]);
-            $removed[$name] = $decision['type'];
+            $removed[$label . $name] = $decision['type'];
+        }
+        return $this->sanitizeCustomAttributes($item, $className, $removed, $label);
+    }
+
+    /**
+     * Applies the allow-list to the object-typed custom attribute values of one item.
+     *
+     * The processor converts a custom attribute whose value is an array and whose type is neither simple nor
+     * "mixed" by building that type directly, without convertValue(); this is the one path the plugin's hook does
+     * not see, so the value (or each item of an array-typed value) is sanitized here against that type's
+     * constructor. The type is resolved exactly as the processor resolves it: the entity type of the owning
+     * class, then the custom attribute type locator. Entries the processor would reject (no code, no value) and
+     * values that are not arrays are left alone.
+     *
+     * @param array $item
+     * @param string $className
+     * @param array $removed
+     * @param string $label
+     * @return array
+     */
+    private function sanitizeCustomAttributes(array $item, string $className, array &$removed, string $label): array
+    {
+        $entityType = null;
+        foreach (self::CUSTOM_ATTRIBUTES_KEYS as $key) {
+            if (!isset($item[$key]) || !is_array($item[$key])) {
+                continue;
+            }
+            if ($entityType === null) {
+                $entityType = $this->entityType($className);
+            }
+            if ($entityType === false) {
+                return $item;
+            }
+            foreach ($item[$key] as $index => $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+                $code = $this->customAttributeCode($entry);
+                if ($code === null
+                    || !array_key_exists(AttributeValue::VALUE, $entry)
+                    || !is_array($entry[AttributeValue::VALUE])
+                ) {
+                    continue;
+                }
+                $attributeType = $this->customAttributeType($code, $entityType);
+                if ($attributeType === null) {
+                    continue;
+                }
+                $value = $entry[AttributeValue::VALUE];
+                $path = $label . $key . '[' . $code . '].';
+                if (substr($attributeType, -2) === '[]') {
+                    $itemType = substr($attributeType, 0, -2);
+                    foreach ($value as $valueIndex => $valueItem) {
+                        if (is_array($valueItem)) {
+                            $value[$valueIndex] = $this->sanitize($valueItem, $itemType, $removed, $path);
+                        }
+                    }
+                } else {
+                    $value = $this->sanitize($value, $attributeType, $removed, $path);
+                }
+                $item[$key][$index][AttributeValue::VALUE] = $value;
+            }
         }
         return $item;
+    }
+
+    /**
+     * The entity type the processor maps a data object class to, or false when there is none.
+     *
+     * Without an entity type every custom attribute is "mixed" for the processor and goes through convertValue().
+     *
+     * @param string $className
+     * @return string|false
+     */
+    private function entityType(string $className)
+    {
+        $owner = $className;
+        if (is_subclass_of($owner, ExtensionAttributesInterface::class)) {
+            $owner = substr($owner, 0, -strlen('Interface'));
+        }
+        $owner = ltrim($owner, '\\');
+        try {
+            $entityType = $this->serviceTypeToEntityTypeMap->getEntityType($owner);
+        } catch (\Throwable $e) {
+            return false;
+        }
+        return is_string($entityType) && $entityType !== '' ? $entityType : false;
+    }
+
+    /**
+     * The code of a custom attribute entry, read as the processor reads it; null when there is none.
+     *
+     * @param array $entry
+     * @return string|null
+     */
+    private function customAttributeCode(array $entry): ?string
+    {
+        foreach (self::ATTRIBUTE_CODE_KEYS as $key) {
+            if (isset($entry[$key]) && is_scalar($entry[$key]) && (string)$entry[$key] !== '') {
+                return (string)$entry[$key];
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The type of a custom attribute when the processor would build it directly, else null.
+     *
+     * Null for a simple or "mixed" type (converted through convertValue(), where the plugin already acts) and
+     * when the locator fails (the processor raises its own error later). Cached per entity type and code.
+     *
+     * @param string $code
+     * @param string $entityType
+     * @return string|null
+     */
+    private function customAttributeType(string $code, string $entityType): ?string
+    {
+        if (!isset($this->customAttributeTypes[$entityType][$code])) {
+            $resolved = false;
+            try {
+                $type = $this->customAttributeTypeLocator->getType($code, $entityType);
+                if (is_string($type)
+                    && $type !== ''
+                    && !$this->typeProcessor->isTypeAny($type)
+                    && !$this->typeProcessor->isTypeSimple($type)
+                ) {
+                    $resolved = $type;
+                }
+            } catch (\Throwable $e) {
+                $resolved = false;
+            }
+            $this->customAttributeTypes[$entityType][$code] = $resolved;
+        }
+        $type = $this->customAttributeTypes[$entityType][$code];
+        return $type === false ? null : $type;
     }
 
     /**
