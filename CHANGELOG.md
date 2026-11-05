@@ -12,4 +12,4 @@ All notable changes to `bigcartenergy/module-sessionreaper-patch` by Big Cart En
 
 ### Tested
 
-- Filled in from the bench before the release (see the README's Tested versions table).
+- Magento Open Source 2.4.9 (PHP 8.5, MySQL 8.4), 2.4.8 (PHP 8.3, MySQL 8.4) and 2.3.7-p4 (PHP 7.4, MySQL 5.7): install and compile, the REST checkout, customer, search and product-save flows, one SOAP call with search criteria, the removal of a constructor parameter outside `Api\Data` over REST and SOAP with its log line, identical behaviour of every Magento API flow with and without the module, removal, and the unit suite on PHPUnit 9, 10 and 12. Alone and together with `bigcartenergy/module-cosmicsting-patch`.

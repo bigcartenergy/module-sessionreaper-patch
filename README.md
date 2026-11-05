@@ -30,7 +30,9 @@ A version that is not in this table has not been tested. Use at your own risk an
 
 | Magento Open Source | PHP | Database | Result |
 | --- | --- | --- | --- |
-| (filled in from the bench before the release) | | | |
+| 2.4.9 | 8.5 | MySQL 8.4 | Pass: install and `setup:di:compile`; REST guest checkout to a placed order, customer account create, product search with filters and sort orders, admin product save with custom and extension attributes; one SOAP call with search criteria; the guard removes a constructor parameter outside `Api\Data` over REST (single and list) and over SOAP (both `item` wrapper shapes) and logs it; the same calls behave the same with and without the module (Adobe's fix is already in this release); removal with a REST pass afterwards; unit tests in place. Alone and together with the CosmicSting patch |
+| 2.4.8 | 8.3 | MySQL 8.4 | Pass: the same checks; on this release the module is the only guard |
+| 2.3.7-p4 | 7.4 | MySQL 5.7 | Pass: the same checks; on this release the module is the only guard |
 
 ## Install
 
