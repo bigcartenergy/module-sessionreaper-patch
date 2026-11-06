@@ -262,6 +262,60 @@ class ServiceInputProcessorPluginTest extends TestCase
         self::assertSame([['memo', 'bench_note']], $this->locatorRequests, 'only the array value is resolved');
     }
 
+    public function testEverySpellingTheProcessorRoutesToCustomAttributesIsSanitized(): void
+    {
+        foreach ($this->customAttributesKeySpellings() as $key) {
+            $data = [
+                $key => [
+                    [
+                        'attribute_code' => 'memo',
+                        'value' => ['title' => 'Inner', 'attachment' => ['label' => 'a'], 'tag' => ['name' => 't']],
+                    ],
+                ],
+            ];
+            $result = $this->convert($data, Note::class, [], [Note::class => 'bench_note'], ['memo' => Note::class]);
+
+            self::assertNotNull($result, 'the key "' . $key . '" is recognised as the custom attributes container');
+            self::assertSame(
+                ['title' => 'Inner', 'tag' => ['name' => 't']],
+                $result[0][$key][0]['value'],
+                'the parameter outside Api\Data is removed from the value under the key "' . $key . '"'
+            );
+        }
+    }
+
+    /**
+     * The spellings the processor's SimpleDataObjectConverter::snakeCaseToUpperCamelCase() maps to "CustomAttributes".
+     *
+     * @return string[]
+     */
+    private function customAttributesKeySpellings(): array
+    {
+        return [
+            'custom_attributes',
+            'customAttributes',
+            'CustomAttributes',
+            'Custom_Attributes',
+            'custom_Attributes',
+            '_custom_attributes',
+            'custom_attributes_',
+            'custom__attributes',
+        ];
+    }
+
+    public function testAKeyThatDoesNotNormaliseToCustomAttributesIsLeftAlone(): void
+    {
+        $data = [
+            'customattributes' => [
+                ['attribute_code' => 'memo', 'value' => ['title' => 'Inner', 'attachment' => ['label' => 'a']]],
+            ],
+        ];
+        $result = $this->convert($data, Note::class, [], [Note::class => 'bench_note'], ['memo' => Note::class]);
+
+        self::assertNull($result, 'a key the processor does not route to custom attributes is not the container');
+        self::assertSame([], $this->locatorRequests, 'the locator is never consulted for a non-container key');
+    }
+
     public function testSimpleUnknownAndScalarCustomAttributesAreLeftAlone(): void
     {
         $data = [

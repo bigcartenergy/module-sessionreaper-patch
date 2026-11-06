@@ -10,6 +10,7 @@ namespace BigCartEnergy\SessionReaperPatch\Plugin\Webapi;
 use BigCartEnergy\SessionReaperPatch\Model\RequestLogger;
 use Magento\Framework\Api\AttributeValue;
 use Magento\Framework\Api\ExtensionAttributesInterface;
+use Magento\Framework\Api\SimpleDataObjectConverter;
 use Magento\Framework\ObjectManager\ConfigInterface;
 use Magento\Framework\Reflection\TypeProcessor;
 use Magento\Framework\Webapi\CustomAttributeTypeLocatorInterface;
@@ -46,9 +47,11 @@ class ServiceInputProcessorPlugin
     private const SOAP_ITEM_KEY = 'item';
 
     /**
-     * The keys under which a data object's custom attributes arrive: REST (snake case) and SOAP (camel case).
+     * The property the processor treats as a data object's custom attributes: it routes a key there when
+     * SimpleDataObjectConverter::snakeCaseToUpperCamelCase() of the key equals this, which covers "custom_attributes",
+     * "customAttributes" and every other spelling that normalises to it, so this plugin recognises the same keys.
      */
-    private const CUSTOM_ATTRIBUTES_KEYS = ['custom_attributes', 'customAttributes'];
+    private const CUSTOM_ATTRIBUTES_PROPERTY = 'CustomAttributes';
 
     /**
      * The keys that carry a custom attribute's code: REST (snake case) and SOAP (camel case), as the processor
@@ -260,8 +263,8 @@ class ServiceInputProcessorPlugin
     private function sanitizeCustomAttributes(array $item, string $className, array &$removed, string $label): array
     {
         $entityType = null;
-        foreach (self::CUSTOM_ATTRIBUTES_KEYS as $key) {
-            if (!isset($item[$key]) || !is_array($item[$key])) {
+        foreach (array_keys($item) as $key) {
+            if (!is_array($item[$key]) || !$this->isCustomAttributesKey((string)$key)) {
                 continue;
             }
             if ($entityType === null) {
@@ -301,6 +304,17 @@ class ServiceInputProcessorPlugin
             }
         }
         return $item;
+    }
+
+    /**
+     * Whether the processor treats a key as the custom attributes property, matched as the processor matches it.
+     *
+     * @param string $key
+     * @return bool
+     */
+    private function isCustomAttributesKey(string $key): bool
+    {
+        return SimpleDataObjectConverter::snakeCaseToUpperCamelCase($key) === self::CUSTOM_ATTRIBUTES_PROPERTY;
     }
 
     /**

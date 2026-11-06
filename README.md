@@ -86,15 +86,48 @@ Nothing is left behind except the log file, which you can delete. The production
 
 ## Logging and IP addresses
 
-Logging is on by default. IP addresses are personal data in the EU, so if your store has no basis to keep them, turn the log off with this override inside the `<config>` root of the `etc/di.xml` of a module of your own, then run `bin/magento setup:di:compile` and `bin/magento cache:clean`. Do not put it in Magento's `app/etc/di.xml`: that file belongs to the `magento/magento2-base` package and is written over when that package updates, which would switch the log back on without notice.
+Logging is on by default. IP addresses are personal data in the EU, so if your store has no basis to keep them, turn the log off from a small module of your own, the three files below. Magento merges every module's `etc/di.xml` in module load order and the last value wins; this module sets `enableLog` to true in its own `etc/di.xml`, so yours must load after it, which the `<sequence>` in its `module.xml` guarantees. Without that `<sequence>` a module whose name sorts before `BigCartEnergy` loads first, loses the merge, and the log stays on with nothing to tell you. Do not put the override in Magento's `app/etc/di.xml` either: that file belongs to the `magento/magento2-base` package and is written over when that package updates.
+
+`app/code/Acme/PatchLogOff/registration.php` (use your own vendor name in place of `Acme`):
+
+```php
+<?php
+\Magento\Framework\Component\ComponentRegistrar::register(
+    \Magento\Framework\Component\ComponentRegistrar::MODULE,
+    'Acme_PatchLogOff',
+    __DIR__
+);
+```
+
+`app/code/Acme/PatchLogOff/etc/module.xml`:
 
 ```xml
-<type name="BigCartEnergy\SessionReaperPatch\Plugin\Webapi\ServiceInputProcessorPlugin">
-    <arguments>
-        <argument name="enableLog" xsi:type="boolean">false</argument>
-    </arguments>
-</type>
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:Module/etc/module.xsd">
+    <module name="Acme_PatchLogOff">
+        <sequence>
+            <module name="BigCartEnergy_SessionReaperPatch"/>
+        </sequence>
+    </module>
+</config>
 ```
+
+`app/code/Acme/PatchLogOff/etc/di.xml`:
+
+```xml
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+    <type name="BigCartEnergy\SessionReaperPatch\Plugin\Webapi\ServiceInputProcessorPlugin">
+        <arguments>
+            <argument name="enableLog" xsi:type="boolean">false</argument>
+        </arguments>
+    </type>
+</config>
+```
+
+Then `bin/magento module:enable Acme_PatchLogOff`, `bin/magento setup:upgrade`, `bin/magento setup:di:compile` and `bin/magento cache:clean` (the production-mode note under Install applies here too).
+
+Confirm it took. `bin/magento module:status` lists the enabled modules in load order, and `Acme_PatchLogOff` must come after `BigCartEnergy_SessionReaperPatch`; if it comes before, the `<sequence>` is missing or misspelled and the log is still on. Nothing exposes the switch directly, so the check that settles it is the file itself: run your store's own API traffic on a staging copy and confirm `var/log/bigcartenergy_cve-2025-54236.log` gains no line. (Before the switch, a request the guard acted on added one.)
 
 The guard works the same with the log off.
 
